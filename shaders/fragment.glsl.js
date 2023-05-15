@@ -16,7 +16,7 @@ const fragmentShader = /* glsl */ `
             scale = vec2(uAspectRatio, 1.);
         }
 
-        normUV = (normUV - vec2(0.5)) * scale * 2. + vec2(0.5);
+        normUV = (normUV - vec2(0.5)) * scale * 1.5 + vec2(0.5);
 
         normUV.x -= uProgress;
 
