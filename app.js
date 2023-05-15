@@ -3,13 +3,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import fragment from './shaders/fragment.glsl.js';
 import vertex from './shaders/vertex.glsl.js';
-import texture from './images/texture.jpg';
+import texture from './images/texture2.jpg';
 import GUI from 'lil-gui';
+import { createNoise2D } from 'simplex-noise';
+
+const noise2D = createNoise2D();
 
 class Point {
-  constructor(x, y) {
+  constructor(x, y, mesh, index) {
     this.position = new THREE.Vector2(x, y);
     this.originalPos = new THREE.Vector2(x, y);
+    this.originalMesh = mesh;
+    this.originalMeshX = mesh.position.x;
+    this.index = index;
 
     this.mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.05, 10, 10),
@@ -18,11 +24,23 @@ class Point {
   }
 
   update(mouse) {
-    let mouseForce = this.originalPos.clone().sub(mouse);
-    let distance = mouseForce.length();
+    const mouseForce = this.originalPos.clone().sub(mouse);
+    const distance = mouseForce.length();
+    const forceFactor = 1 / Math.max(distance, 0.2);
+    const finalPosition = this.originalPos
+      .clone()
+      .sub(
+        mouseForce.normalize().multiplyScalar(-distance * 0.2 * forceFactor)
+      );
+    this.position.lerp(finalPosition, 0.1);
 
     this.mesh.position.x = this.position.x;
     this.mesh.position.y = this.position.y;
+
+    const posArray = this.originalMesh.geometry.attributes.position.array;
+    posArray[this.index * 3] = this.position.x - this.originalMeshX;
+    posArray[this.index * 3 + 1] = this.position.y;
+    this.originalMesh.geometry.attributes.position.needsUpdate = true;
   }
 }
 
@@ -47,17 +65,6 @@ export default class Sketch {
       1000
     );
 
-    // const frustrumSize = 0.75;
-    // const aspect = this.width / this.height;
-    // this.camera = new THREE.OrthographicCamera(
-    //   (frustrumSize * aspect) / -2,
-    //   (frustrumSize * aspect) / 2,
-    //   frustrumSize / 2,
-    //   frustrumSize / -2,
-    //   -1000,
-    //   1000
-    // );
-
     this.camera.position.set(0, 0, 2);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
 
@@ -70,13 +77,26 @@ export default class Sketch {
       this.camera.position.z *
       this.camera.aspect;
 
-    this.mouseEvents();
-    this.setupPoints();
-    this.addMesh();
     this.setupResize();
     this.resize();
+    this.mouseEvents();
+    this.addMesh();
+    this.setupPoints();
     this.settings();
     this.render();
+  }
+
+  setupResize() {
+    window.addEventListener('resize', this.resize.bind(this));
+  }
+
+  resize() {
+    this.width = this.container.offsetWidth;
+    this.height = this.container.offsetHeight;
+    this.renderer.setSize(this.width, this.height);
+    this.camera.aspect = this.width / this.height;
+
+    this.camera.updateProjectionMatrix();
   }
 
   mouseEvents() {
@@ -92,32 +112,6 @@ export default class Sketch {
         this.pointer.y = intersects[0].point.y;
       }
     });
-  }
-
-  setupPoints() {
-    this.points = [];
-
-    for (let i = 0; i < 5; i++) {
-      let x = Math.random() * 2 - 1;
-      let y = Math.random() * 2 - 1;
-      let point = new Point(x, y);
-
-      this.points.push(point);
-      this.scene.add(point.mesh);
-    }
-  }
-
-  setupResize() {
-    window.addEventListener('resize', this.resize.bind(this));
-  }
-
-  resize() {
-    this.width = this.container.offsetWidth;
-    this.height = this.container.offsetHeight;
-    this.renderer.setSize(this.width, this.height);
-    this.camera.aspect = this.width / this.height;
-
-    this.camera.updateProjectionMatrix();
   }
 
   addMesh() {
@@ -140,26 +134,40 @@ export default class Sketch {
     this.geometry = new THREE.PlaneGeometry(1, 1, 1, 1);
 
     this.plane = new THREE.Mesh(this.geometry, this.material);
-    this.scene.add(this.plane);
+    // this.scene.add(this.plane);
+
+    this.meshes = [];
+
+    for (let i = -2; i < 3; i++) {
+      const g = new THREE.PlaneGeometry(1, 1, 1, 1);
+      const m = this.material.clone();
+      m.uniforms.uTexture.value = this.material.uniforms.uTexture.value;
+      m.uniforms.uProgress.value = i / 2;
+      const mesh = new THREE.Mesh(g, m);
+
+      mesh.userData.position = i;
+      mesh.position.x = i;
+      this.meshes.push(mesh);
+      this.scene.add(mesh);
+    }
   }
 
-  updateGeo() {
-    let posArray = this.geometry.attributes.position.array;
+  setupPoints() {
+    this.points = [];
 
-    for (let i = 0; i < posArray.length; i += 3) {
-      let x = posArray[i];
-      let y = posArray[i + 1];
-      let z = posArray[i + 2];
+    this.meshes.forEach((m) => {
+      const posArray = m.geometry.attributes.position.array;
 
-      let noise = 0.1 * Math.sin(y * 2 + this.time) * 0.2;
-      // posArray[i] = x + noise;
-    }
+      for (let i = 0; i < posArray.length; i += 3) {
+        const x = posArray[i] + m.position.x;
+        const y = posArray[i + 1];
+        const r1 = noise2D(x, y) * 0.1;
+        const r2 = noise2D(x, y) * 0.1;
+        const p = new Point(x + r1, y + r2, m, i / 3);
 
-    this.geometry.attributes.position.needsUpdate = true;
-
-    // Points
-    this.points.map((p) => {
-      p.update(this.pointer);
+        this.points.push(p);
+        this.scene.add(p.mesh);
+      }
     });
   }
 
@@ -169,17 +177,26 @@ export default class Sketch {
     };
     this.gui = new GUI();
     this.gui.add(this.settings, 'progress', -1, 1, 0.001);
+
+    this.plane.position.x = this.settings.progress * this.screenSpaceWidth;
   }
 
   render() {
     this.time += 0.05;
     this.material.uniforms.uTime.value = this.time;
     this.material.uniforms.uProgress.value = this.settings.progress;
-    this.plane.position.x = this.settings.progress * this.screenSpaceWidth;
 
     this.renderer.render(this.scene, this.camera);
     window.requestAnimationFrame(this.render.bind(this));
-    this.updateGeo();
+
+    this.points.map((p) => {
+      p.update(this.pointer);
+    });
+
+    this.meshes.forEach((m) => {
+      m.position.x = m.userData.position + this.settings.progress * 10;
+      m.material.uniforms.uProgress.value = m.position.x / 2;
+    });
   }
 }
 
